@@ -134,6 +134,18 @@ function drawBorders(){
   coastPath();
   ctx.strokeStyle = 'rgba(45,58,70,0.8)'; ctx.lineWidth = 1.4; ctx.stroke();
 }
+function drawLabels(){
+  if (!DATA.labels || !DATA.labels.length) return;
+  ctx.font = '600 ' + Math.max(15, Math.round(W * 0.017)) + 'px "Hiragino Sans", "Noto Sans JP", sans-serif';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (const L of DATA.labels){
+    const x = X(L.lon), y = Y(L.lat);
+    ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+    ctx.strokeText(L.name, x, y);
+    ctx.fillStyle = 'rgba(25,35,45,0.82)';
+    ctx.fillText(L.name, x, y);
+  }
+}
 const DEPTH_BANDS = [[30,'#e7298a','〜30km'],[80,'#7570b3','30〜80km'],[150,'#1b9e77','80〜150km'],[1e9,'#636363','150km〜']];
 const INT_COLORS = {'3':'#ffe600','4':'#ff9500','5-':'#ff5a00','5+':'#e60000','6-':'#b00000','6+':'#7d0000','7':'#4b0082'};
 function inView(lat, lon){ return lat>=EXT.latMin-0.05 && lat<=EXT.latMax+0.05 && lon>=EXT.lonMin-0.05 && lon<=EXT.lonMax+0.05; }
@@ -147,6 +159,7 @@ function render(snap){
   ctx.imageSmoothingEnabled = true;
   ctx.drawImage(heatCanvas(snap), 0, 0, W, H);
   drawBorders();
+  drawLabels();
   // earthquakes: white-filled circles, ring color = depth, size = magnitude
   for (const q of snap.quakes){
     if (!inView(q.lat, q.lon)) continue;

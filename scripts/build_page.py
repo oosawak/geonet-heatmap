@@ -28,6 +28,7 @@ REGIONS = {
         "prefs": {"三重県", "徳島県", "香川県", "愛媛県", "高知県"},
         "ext": {"latMin": 32.3, "latMax": 35.6, "lonMin": 131.7, "lonMax": 137.7},
         "title": "地殻変動ヒートマップ（試作）― 三重・四国",
+        "pref_labels": True,
         "label": "三重・四国", "other_href": "../", "other_label": "東北",
         "map_long_px": 1600,
         "expl_note": "フィリピン海プレートの沈み込みに伴う地殻変動やプレート運動そのものを含む動きで、観測には数mm程度の誤差があります。",
@@ -131,6 +132,37 @@ def coastline(prefs):
                 rings.append([[round(x, 3), round(y, 3)] for x, y in ring])
     return rings
 
+def pref_labels(prefs):
+    """Label point (name without 県/府 suffix, lat, lon) per prefecture:
+    the area centroid of its largest outer ring."""
+    gj = os.path.join(ROOT, "work", "japan_pref.geojson")
+    data = json.load(open(gj, encoding="utf-8"))
+    labels = []
+    for feat in data.get("features", []):
+        name = feat.get("properties", {}).get("nam_ja")
+        if name not in prefs:
+            continue
+        geom = feat["geometry"]
+        polys = geom["coordinates"] if geom["type"] == "MultiPolygon" else [geom["coordinates"]]
+        best = None
+        for poly in polys:
+            ring = poly[0]
+            a = cx = cy = 0.0
+            for (x1, y1), (x2, y2) in zip(ring, ring[1:] + ring[:1]):
+                cross = x1 * y2 - x2 * y1
+                a += cross
+                cx += (x1 + x2) * cross
+                cy += (y1 + y2) * cross
+            if a == 0:
+                continue
+            a *= 0.5
+            if best is None or abs(a) > abs(best[0]):
+                best = (a, cx / (6 * a), cy / (6 * a))
+        if best:
+            short = name[:-1] if name.endswith(("県", "府")) else name
+            labels.append({"name": short, "lon": round(best[1], 3), "lat": round(best[2], 3)})
+    return labels
+
 def build_region(tpl, key, cfg):
     snaps = [parse_snapshot(p) for p in sorted(glob.glob(os.path.join(ROOT, cfg["snap_dir"], "*.md")))]
     if not snaps:
@@ -140,6 +172,7 @@ def build_region(tpl, key, cfg):
            f'　（このページは{cfg["label"]}）')
     html = tpl.replace("/*__DATA__*/",
                        json.dumps({"snaps": snaps, "coast": coastline(cfg["prefs"]),
+                                   "labels": pref_labels(cfg["prefs"]) if cfg.get("pref_labels") else [],
                                    "snapDir": cfg["snap_dir"]}, ensure_ascii=False))
     map_w, map_h = map_size(cfg)
     html = html.replace("__PAGE_TITLE__", cfg["title"])
