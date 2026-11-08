@@ -14,7 +14,10 @@ ROOT = os.path.expanduser("~/workspace/geonet-heatmap")
 REGIONS = {
     "tohoku": (["青森県", "岩手県", "宮城県", "秋田県", "山形県", "福島県"],
                "work/stations_list.json"),
-    "nankai": (["三重県", "徳島県", "香川県", "愛媛県", "高知県"],
+    "nankai": (["三重県", "徳島県", "香川県", "愛媛県", "高知県",
+                "和歌山県", "奈良県", "滋賀県", "岐阜県", "愛知県", "静岡県",
+                "兵庫県", "大阪府", "京都府", "岡山県", "広島県", "山口県",
+                "大分県", "宮崎県"],
                "work/stations_list_nankai.json"),
 }
 

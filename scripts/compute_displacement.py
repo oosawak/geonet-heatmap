@@ -28,13 +28,18 @@ REGIONS = {
         "region_ja": "東北",
     },
     "nankai": {
-        "bbox": dict(lat_min=32.3, lat_max=35.6, lon_min=131.7, lon_max=137.7),
+        "bbox": dict(lat_min=31.3, lat_max=36.55, lon_min=130.6, lon_max=139.3),
         "stations_list": "work/stations_list_nankai.json",
         "snap_dir": "snapshots-nankai",
-        "quake_box": (31.5, 36.5, 131.0, 138.5),
-        "intensity_prefs": {"三重県", "徳島県", "香川県", "愛媛県", "高知県"},
-        "intensity_codes": {"24", "36", "37", "38", "39"},
-        "region_ja": "三重・四国",
+        "quake_box": (30.5, 37.35, 129.8, 140.1),
+        "intensity_prefs": {"三重県", "徳島県", "香川県", "愛媛県", "高知県",
+                            "和歌山県", "奈良県", "滋賀県", "岐阜県", "愛知県",
+                            "静岡県", "兵庫県", "大阪府", "京都府", "岡山県",
+                            "広島県", "山口県", "大分県", "宮崎県"},
+        "intensity_codes": {"21", "22", "23", "24", "25", "26", "27", "28", "29",
+                            "30", "33", "34", "35", "36", "37", "38", "39",
+                            "44", "45"},
+        "region_ja": "三重・四国とその周辺",
     },
 }
 M_PER_DEG = 111194.9  # spherical approx, fine for differencing

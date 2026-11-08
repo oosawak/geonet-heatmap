@@ -8,7 +8,7 @@ from the region's prefecture polygons in work/japan_pref.geojson.
 
 Regions:
   tohoku -> index.html          (snapshots/)
-  nankai -> nankai/index.html   (snapshots-nankai/)  三重・四国
+  nankai -> nankai/index.html   (snapshots-nankai/)  三重・四国とその周辺
 """
 import os, re, json, glob, math
 
@@ -19,17 +19,20 @@ REGIONS = {
         "prefs": {"青森県", "岩手県", "宮城県", "秋田県", "山形県", "福島県"},
         "ext": {"latMin": 36.8, "latMax": 41.5, "lonMin": 139.3, "lonMax": 142.3},
         "title": "地殻変動ヒートマップ（試作）― 東北の電子基準点",
-        "label": "東北", "other_href": "./nankai/", "other_label": "三重・四国",
+        "label": "東北", "other_href": "./nankai/", "other_label": "三重・四国とその周辺",
         "map_long_px": 1600,
         "expl_note": "2011年の東北地方太平洋沖地震の余効変動やプレート運動そのものも含む動きで、観測には数mm程度の誤差があります。",
     },
     "nankai": {
         "snap_dir": "snapshots-nankai", "out": "nankai/index.html",
-        "prefs": {"三重県", "徳島県", "香川県", "愛媛県", "高知県"},
-        "ext": {"latMin": 32.3, "latMax": 35.6, "lonMin": 131.7, "lonMax": 137.7},
-        "title": "地殻変動ヒートマップ（試作）― 三重・四国",
+        "prefs": {"三重県", "徳島県", "香川県", "愛媛県", "高知県",
+                  "和歌山県", "奈良県", "滋賀県", "岐阜県", "愛知県", "静岡県",
+                  "兵庫県", "大阪府", "京都府", "岡山県", "広島県", "山口県",
+                  "大分県", "宮崎県"},
+        "ext": {"latMin": 31.3, "latMax": 36.55, "lonMin": 130.6, "lonMax": 139.3},
+        "title": "地殻変動ヒートマップ（試作）― 三重・四国とその周辺",
         "pref_labels": True,
-        "label": "三重・四国", "other_href": "../", "other_label": "東北",
+        "label": "三重・四国とその周辺", "other_href": "../", "other_label": "東北",
         "map_long_px": 1600,
         "expl_note": "フィリピン海プレートの沈み込みに伴う地殻変動やプレート運動そのものを含む動きで、観測には数mm程度の誤差があります。",
     },
