@@ -111,14 +111,20 @@ function heatCanvas(snap){
   octx.putImageData(img, 0, 0);
   heatCache[snap.date] = off; return off;
 }
-function drawCoast(){
+function coastPath(){
   ctx.beginPath();
   for (const ring of DATA.coast){
     ring.forEach(([lon,lat], i) => i ? ctx.lineTo(X(lon), Y(lat)) : ctx.moveTo(X(lon), Y(lat)));
     ctx.closePath();
   }
+}
+function drawLand(){
+  coastPath();
   ctx.fillStyle = '#f4f1e6'; ctx.fill();
-  ctx.strokeStyle = '#7a8a99'; ctx.lineWidth = 1.1; ctx.stroke();
+}
+function drawBorders(){
+  coastPath();
+  ctx.strokeStyle = 'rgba(45,58,70,0.8)'; ctx.lineWidth = 1.4; ctx.stroke();
 }
 const DEPTH_BANDS = [[30,'#e7298a','〜30km'],[80,'#7570b3','30〜80km'],[150,'#1b9e77','80〜150km'],[1e9,'#636363','150km〜']];
 const INT_COLORS = {'3':'#ffe600','4':'#ff9500','5-':'#ff5a00','5+':'#e60000','6-':'#b00000','6+':'#7d0000','7':'#4b0082'};
@@ -126,9 +132,10 @@ function inView(lat, lon){ return lat>=EXT.latMin-0.05 && lat<=EXT.latMax+0.05 &
 function render(snap){
   ctx.clearRect(0, 0, W, H);
   ctx.fillStyle = '#dde7ee'; ctx.fillRect(0, 0, W, H);
-  drawCoast();
+  drawLand();
   ctx.imageSmoothingEnabled = true;
   ctx.drawImage(heatCanvas(snap), 0, 0, W, H);
+  drawBorders();
   // earthquakes: white-filled circles, ring color = depth, size = magnitude
   for (const q of snap.quakes){
     if (!inView(q.lat, q.lon)) continue;
