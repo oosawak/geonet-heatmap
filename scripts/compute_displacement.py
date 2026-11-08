@@ -17,7 +17,26 @@ import datetime as dt
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 ROOT = os.path.expanduser("~/workspace/geonet-heatmap")
-BBOX = dict(lat_min=36.8, lat_max=41.5, lon_min=139.3, lon_max=142.3)
+REGIONS = {
+    "tohoku": {
+        "bbox": dict(lat_min=36.8, lat_max=41.5, lon_min=139.3, lon_max=142.3),
+        "stations_list": "work/stations_list.json",
+        "snap_dir": "snapshots",
+        "quake_box": (35.5, 42.5, 138.0, 145.0),  # lat_min, lat_max, lon_min, lon_max
+        "intensity_prefs": {"青森県", "岩手県", "宮城県", "秋田県", "山形県", "福島県"},
+        "intensity_codes": {"02", "03", "04", "05", "06", "07"},
+        "region_ja": "東北",
+    },
+    "nankai": {
+        "bbox": dict(lat_min=32.3, lat_max=35.6, lon_min=131.7, lon_max=137.7),
+        "stations_list": "work/stations_list_nankai.json",
+        "snap_dir": "snapshots-nankai",
+        "quake_box": (31.5, 36.5, 131.0, 138.5),
+        "intensity_prefs": {"三重県", "徳島県", "香川県", "愛媛県", "高知県"},
+        "intensity_codes": {"24", "36", "37", "38", "39"},
+        "region_ja": "三重・四国",
+    },
+}
 M_PER_DEG = 111194.9  # spherical approx, fine for differencing
 SOL_LABEL = {
     "F5.1": "F5.1（最終解・ITRF2020）",
@@ -53,9 +72,10 @@ def window_mean(rows, end, days=7):
     return (sum(r[1] for r in sel) / n, sum(r[2] for r in sel) / n,
             sum(r[3] for r in sel) / n, sel[0][0], sel[-1][0], n)
 
-def compute_stations(data_dir):
+def compute_stations(data_dir, cfg):
+    bbox = cfg["bbox"]
     names, prefs = {}, {}
-    sl = os.path.join(ROOT, "work", "stations_list.json")
+    sl = os.path.join(ROOT, cfg["stations_list"])
     if os.path.exists(sl):
         for c, v in json.load(open(sl, encoding="utf-8")).items():
             names[c], prefs[c] = v[0], v[1]
@@ -77,8 +97,8 @@ def compute_stations(data_dir):
             skipped.append((code, "window shortage")); continue
         lat0 = sum(r[1] for r in rows) / len(rows)
         lon0 = sum(r[2] for r in rows) / len(rows)
-        if not (BBOX["lat_min"] <= lat0 <= BBOX["lat_max"]
-                and BBOX["lon_min"] <= lon0 <= BBOX["lon_max"]):
+        if not (bbox["lat_min"] <= lat0 <= bbox["lat_max"]
+                and bbox["lon_min"] <= lon0 <= bbox["lon_max"]):
             skipped.append((code, "outside bbox")); continue
         dN = (a[0] - b[0]) * M_PER_DEG * 1000.0
         dE = (a[1] - b[1]) * M_PER_DEG * math.cos(math.radians(lat0)) * 1000.0
@@ -99,7 +119,7 @@ def compute_stations(data_dir):
     stations.sort(key=lambda s: -s["horiz_mm"])
     return stations, excluded, skipped
 
-def fetch_extras(winB_start, winA_end, latest):
+def fetch_extras(winB_start, winA_end, latest, cfg):
     """Quakes (JMA catalog+daily merged), intensity points (JMA info JSON),
     geomagnetic Kp (GFZ). Each guarded: failures yield empty data."""
     extras = {"quakes": [], "cat_through": None, "intensity": [],
@@ -107,11 +127,15 @@ def fetch_extras(winB_start, winA_end, latest):
     d0, d1 = dt.date.fromisoformat(winB_start), dt.date.fromisoformat(winA_end)
     try:
         import jma_quakes
+        (jma_quakes.QLAT_MIN, jma_quakes.QLAT_MAX,
+         jma_quakes.QLON_MIN, jma_quakes.QLON_MAX) = cfg["quake_box"]
         extras["quakes"], extras["cat_through"] = jma_quakes.fetch_merged(d0, d1, 3.0)
     except Exception as ex:
         print("quakes fetch failed:", ex, flush=True)
     try:
         import jma_intensity
+        jma_intensity.PREFS = cfg["intensity_prefs"]
+        jma_intensity.PREF_CODES = cfg["intensity_codes"]
         pts, cs, ce, pm = jma_intensity.fetch_intensity(d0, d1, 3)
         extras["intensity"] = pts
         extras["int_cov"] = (cs, ce) if cs else None
@@ -125,15 +149,16 @@ def fetch_extras(winB_start, winA_end, latest):
         print("geomag fetch failed:", ex, flush=True)
     return extras
 
-def write_snapshot(meta, stations, excluded, extras):
+def write_snapshot(meta, stations, excluded, extras, cfg):
     label = meta["solution_label"]
     latest = meta["latest_date"]
     a, b = meta["winA"], meta["winB"]
     top = stations[0]
     quakes = extras["quakes"]
     n_fin = sum(1 for q in quakes if q["src"] == "確定")
+    qb = cfg["quake_box"]
     L = [
-        f"# 地殻変動スナップショット（{latest}）",
+        f"# 地殻変動スナップショット（{latest}、{cfg['region_ja']}）",
         "",
         f"- 解: {label}",
         f"- データ最新日: {latest}",
@@ -143,7 +168,7 @@ def write_snapshot(meta, stations, excluded, extras):
         f"- 除外点数: {meta['n_excluded']}（異常に大きな変位、アンテナ交換などによる見かけの跳びの疑い）",
         f"- 水平変位の中央値: {meta['median_mm']:.1f} mm",
         f"- 水平変位の最大: {meta['max_mm']:.1f} mm（{top['name']}・{top['pref']}）",
-        f"- 地震データ: 震央 {len(quakes)} 件（確定 {n_fin} 件／暫定 {len(quakes) - n_fin} 件、M3.0以上、緯度35.5〜42.5・経度138.0〜145.0）",
+        f"- 地震データ: 震央 {len(quakes)} 件（確定 {n_fin} 件／暫定 {len(quakes) - n_fin} 件、M3.0以上、緯度{qb[0]}〜{qb[1]}・経度{qb[2]}〜{qb[3]}）",
         "- 正式カタログ収録範囲: " + (f"〜{extras['cat_through']}（これより後は暫定値）"
                                      if extras["cat_through"] else "現時点で対象期間分は未刊行（全件が暫定値）"),
     ]
@@ -151,7 +176,7 @@ def write_snapshot(meta, stations, excluded, extras):
         cs, ce = extras["int_cov"]
         L.append(f"- 震度データ: 震度3以上の観測点 {len(extras['intensity'])} 点"
                  f"（集計期間 {cs} 〜 {ce}、地震情報JSONの公開範囲による。"
-                 f"期間内の東北の最大震度: {extras['int_period_max'] or '―'}）")
+                 f"期間内の{cfg['region_ja']}の最大震度: {extras['int_period_max'] or '―'}）")
     else:
         L.append("- 震度データ: 取得できず")
     L.append("- 地磁気: " + (f"Kp指数 最大 {extras['kp']:.1f}（GFZ、{latest}）"
@@ -188,7 +213,7 @@ def write_snapshot(meta, stations, excluded, extras):
     else:
         L.append("（震度3以上の観測点なし）")
     L.append("")
-    path = os.path.join(ROOT, "snapshots", f"{latest}.md")
+    path = os.path.join(ROOT, cfg["snap_dir"], f"{latest}.md")
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(L))
@@ -198,11 +223,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--data-dir", default="data")
     ap.add_argument("--sol", default="F5.1")
+    ap.add_argument("--region", choices=sorted(REGIONS), default="tohoku")
     ap.add_argument("--no-extras", action="store_true")
     args = ap.parse_args()
+    cfg = REGIONS[args.region]
     data_dir = os.path.join(ROOT, args.data_dir)
     label = SOL_LABEL.get(args.sol, args.sol)
-    stations, excluded, skipped = compute_stations(data_dir)
+    stations, excluded, skipped = compute_stations(data_dir, cfg)
     if not stations:
         print("ERROR: no stations computed"); return 1
     from collections import Counter
@@ -220,11 +247,11 @@ def main():
             "winA": list(winA), "winB": list(winB)}
     extras = ({"quakes": [], "cat_through": None, "intensity": [],
                "int_cov": None, "int_period_max": None, "kp": None}
-              if args.no_extras else fetch_extras(winB[0], winA[1], latest))
-    path = write_snapshot(meta, stations, excluded, extras)
+              if args.no_extras else fetch_extras(winB[0], winA[1], latest, cfg))
+    path = write_snapshot(meta, stations, excluded, extras, cfg)
     out = {"meta": meta, "stations": stations, "excluded": excluded,
            "skipped": skipped, "extras": extras}
-    with open(os.path.join(ROOT, "work", f"stations_{args.sol}.json"), "w", encoding="utf-8") as f:
+    with open(os.path.join(ROOT, "work", f"stations_{args.region}_{args.sol}.json"), "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=1)
     print(json.dumps(meta, ensure_ascii=False))
     print("snapshot:", path)

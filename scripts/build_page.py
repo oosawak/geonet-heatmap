@@ -1,17 +1,53 @@
 #!/usr/bin/env python3
-"""Build index.html (repo root, which GitHub Pages publishes) from the
-Markdown master records in snapshots/.
+"""Build the region pages from the Markdown master records.
 
-Each snapshots/<date>.md holds one day's result (meta lines, station
-table, earthquake list, intensity points). The page embeds all snapshots
-and offers a date selector (history). Coastline comes from the Tohoku
-prefecture polygons in work/japan_pref.geojson.
+Each snapshots*/<date>.md holds one day's result (meta lines, station
+table, earthquake list, intensity points). The pages embed all snapshots
+of their region and offer a date selector (history). Coastline comes
+from the region's prefecture polygons in work/japan_pref.geojson.
+
+Regions:
+  tohoku -> index.html          (snapshots/)
+  nankai -> nankai/index.html   (snapshots-nankai/)  三重・四国
 """
-import os, re, json, glob
+import os, re, json, glob, math
 
 ROOT = os.path.expanduser("~/workspace/geonet-heatmap")
-EXT = dict(lat_min=36.8, lat_max=41.5, lon_min=139.3, lon_max=142.3)
-TOHOKU = {"青森県", "岩手県", "宮城県", "秋田県", "山形県", "福島県"}
+REGIONS = {
+    "tohoku": {
+        "snap_dir": "snapshots", "out": "index.html",
+        "prefs": {"青森県", "岩手県", "宮城県", "秋田県", "山形県", "福島県"},
+        "ext": {"latMin": 36.8, "latMax": 41.5, "lonMin": 139.3, "lonMax": 142.3},
+        "title": "地殻変動ヒートマップ（試作）― 東北の電子基準点",
+        "label": "東北", "other_href": "./nankai/", "other_label": "三重・四国",
+        "map_long_px": 1600,
+        "expl_note": "2011年の東北地方太平洋沖地震の余効変動やプレート運動そのものも含む動きで、観測には数mm程度の誤差があります。",
+    },
+    "nankai": {
+        "snap_dir": "snapshots-nankai", "out": "nankai/index.html",
+        "prefs": {"三重県", "徳島県", "香川県", "愛媛県", "高知県"},
+        "ext": {"latMin": 32.3, "latMax": 35.6, "lonMin": 131.7, "lonMax": 137.7},
+        "title": "地殻変動ヒートマップ（試作）― 三重・四国",
+        "label": "三重・四国", "other_href": "../", "other_label": "東北",
+        "map_long_px": 1600,
+        "expl_note": "フィリピン海プレートの沈み込みに伴う地殻変動やプレート運動そのものを含む動きで、観測には数mm程度の誤差があります。",
+    },
+}
+
+def map_size(cfg):
+    """Canvas size whose width/height matches the true ground aspect:
+    longitude degrees shrink by cos(centre latitude), so
+    width/height = lon_range * cos(centre_lat) / lat_range.
+    The longer side becomes cfg['map_long_px']."""
+    ext = cfg["ext"]
+    lat_range = ext["latMax"] - ext["latMin"]
+    lon_range = ext["lonMax"] - ext["lonMin"]
+    centre = math.radians((ext["latMin"] + ext["latMax"]) / 2.0)
+    aspect = lon_range * math.cos(centre) / lat_range
+    long_px = cfg["map_long_px"]
+    if aspect >= 1:
+        return long_px, round(long_px / aspect)
+    return round(long_px * aspect), long_px
 DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 def table_rows(section_text):
@@ -81,12 +117,12 @@ def parse_snapshot(path):
             "intNote": meta.get("震度データ", ""), "kpNote": meta.get("地磁気", ""),
             "stations": stations, "quakes": quakes, "intensity": intensity}
 
-def coastline():
+def coastline(prefs):
     gj = os.path.join(ROOT, "work", "japan_pref.geojson")
     data = json.load(open(gj, encoding="utf-8"))
     rings = []
     for feat in data.get("features", []):
-        if feat.get("properties", {}).get("nam_ja") not in TOHOKU:
+        if feat.get("properties", {}).get("nam_ja") not in prefs:
             continue
         geom = feat["geometry"]
         polys = geom["coordinates"] if geom["type"] == "MultiPolygon" else [geom["coordinates"]]
@@ -95,18 +131,35 @@ def coastline():
                 rings.append([[round(x, 3), round(y, 3)] for x, y in ring])
     return rings
 
-def main():
-    snaps = [parse_snapshot(p) for p in sorted(glob.glob(os.path.join(ROOT, "snapshots", "*.md")))]
+def build_region(tpl, key, cfg):
+    snaps = [parse_snapshot(p) for p in sorted(glob.glob(os.path.join(ROOT, cfg["snap_dir"], "*.md")))]
     if not snaps:
-        print("ERROR: no snapshots"); return 1
-    tpl = open(os.path.join(ROOT, "scripts", "template.html"), encoding="utf-8").read()
+        print(f"SKIP {key}: no snapshots in {cfg['snap_dir']}")
+        return None
+    nav = (f'他の地域のヒートマップ： <a href="{cfg["other_href"]}">{cfg["other_label"]}</a>'
+           f'　（このページは{cfg["label"]}）')
     html = tpl.replace("/*__DATA__*/",
-                       json.dumps({"snaps": snaps, "coast": coastline()}, ensure_ascii=False))
-    out = os.path.join(ROOT, "index.html")
+                       json.dumps({"snaps": snaps, "coast": coastline(cfg["prefs"]),
+                                   "snapDir": cfg["snap_dir"]}, ensure_ascii=False))
+    map_w, map_h = map_size(cfg)
+    html = html.replace("__PAGE_TITLE__", cfg["title"])
+    html = html.replace("__REGION_NAV__", nav)
+    html = html.replace("__EXT_JSON__", json.dumps(cfg["ext"]))
+    html = html.replace("__MAP_W__", str(map_w))
+    html = html.replace("__MAP_H__", str(map_h))
+    html = html.replace("__EXPL_NOTE__", cfg["expl_note"])
+    out = os.path.join(ROOT, cfg["out"])
+    os.makedirs(os.path.dirname(out), exist_ok=True)
     with open(out, "w", encoding="utf-8") as f:
         f.write(html)
-    print("wrote", out, f"({len(snaps)} snapshots:", ", ".join(s["date"] for s in snaps), ")")
-    return 0
+    print("wrote", out, f"({len(snaps)} snapshots:", ", ".join(s["date"] for s in snaps),
+          f"; map {map_w}x{map_h})")
+    return out
+
+def main():
+    tpl = open(os.path.join(ROOT, "scripts", "template.html"), encoding="utf-8").read()
+    built = [build_region(tpl, k, c) for k, c in REGIONS.items()]
+    return 0 if any(built) else 1
 
 if __name__ == "__main__":
     raise SystemExit(main())

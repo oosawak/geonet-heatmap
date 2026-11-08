@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>地殻変動ヒートマップ（試作）― 東北の電子基準点</title>
+<title>__PAGE_TITLE__</title>
 <style>
   body { font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; margin: 0; background: #f4f6f8; color: #1c2733; }
   .wrap { max-width: 1060px; margin: 0 auto; padding: 16px 14px 40px; }
@@ -19,6 +19,12 @@
   .yahoo { display: inline-block; margin: 14px 0 4px; background: #ff0033; color: #fff; font-weight: 700;
            padding: 10px 16px; border-radius: 8px; text-decoration: none; font-size: 14.5px; }
   .yahoo small { font-weight: 400; }
+  .regionnav { display: inline-block; background: #e8eef4; border: 1px solid #b9c9d8; border-radius: 8px;
+               padding: 7px 12px; font-size: 13.5px; margin: 2px 0 4px; }
+  .regionnav a { font-weight: 700; }
+  .detail { background: #fff; border: 1.5px solid #4a6b8a; border-radius: 8px; padding: 9px 12px;
+            font-size: 14px; line-height: 1.65; margin-top: 8px; }
+  .detail .x { float: right; border: none; background: none; font-size: 16px; cursor: pointer; color: #5a6b7c; }
   .controls { margin: 12px 0 6px; font-size: 14px; }
   .controls select { font-size: 15px; padding: 4px 8px; }
   .info { font-size: 13.5px; color: #33475c; line-height: 1.7; margin: 6px 0 10px; }
@@ -41,6 +47,7 @@
   <div class="top">
     <div class="titlebox">
       <h1>地殻変動ヒートマップ（試作）</h1>
+      <p class="regionnav">__REGION_NAV__</p>
       <div class="notice">これは<strong>地震予測ではありません</strong>。国土地理院の電子基準点（GNSS観測点）の位置の変化を、見える化した試作ページです。色の濃さは「約30日前と比べた、この1週間の地面の動き」の大きさを表します。</div>
       <a class="yahoo" href="https://typhoon.yahoo.co.jp/weather/jp/earthquake/" target="_blank" rel="noopener">外部サイト： Yahoo!天気・災害「地震情報」で最新の地震を見る <small>（別タブで開きます）</small></a>
     </div>
@@ -60,7 +67,8 @@
   </div>
   <div class="info" id="info"></div>
 
-  <canvas id="map" width="1000" height="1180"></canvas>
+  <canvas id="map" width="__MAP_W__" height="__MAP_H__"></canvas>
+  <div class="detail" id="detail" hidden></div>
   <div class="legends" id="legends"></div>
 
   <h2>最新の地震リスト <span class="src">（このスナップショットの対象期間・範囲の新しい順10件）</span></h2>
@@ -70,13 +78,13 @@
   <div id="topTable"></div>
 
   <h2>この図について</h2>
-  <p class="expl">電子基準点の日々の座標値から、直近7日間の平均位置と、約30日前の7日間の平均位置の差を取り、水平方向の動きの大きさを色で補間表示しています（上下の動きは観測点リストに記載）。2011年の東北地方太平洋沖地震の余効変動やプレート運動そのものも含む動きで、観測には数mm程度の誤差があります。海の部分の色は、陸の観測点からの補間が伸びたもので、海上に観測点はありません。震央（○）と震度観測点（◆）も重ねて表示しています。月齢・太陽と月の位置・地磁気は、その日の様子を示す参考表示です。</p>
+  <p class="expl">電子基準点の日々の座標値から、直近7日間の平均位置と、約30日前の7日間の平均位置の差を取り、水平方向の動きの大きさを色で補間表示しています（上下の動きは観測点リストに記載）。__EXPL_NOTE__海の部分の色は、陸の観測点からの補間が伸びたもので、海上に観測点はありません。震央（○）と震度観測点（◆）も重ねて表示しています。地図上の○や◆をクリック／タップすると、その地震や観測点の詳細が出ます。月齢・太陽と月の位置・地磁気は、その日の様子を示す参考表示です。</p>
 
   <footer id="srcFooter"></footer>
 </div>
 <script>
 const DATA = /*__DATA__*/;
-const EXT = {latMin:36.8, latMax:41.5, lonMin:139.3, lonMax:142.3};
+const EXT = __EXT_JSON__;
 const cv = document.getElementById('map'), ctx = cv.getContext('2d');
 const W = cv.width, H = cv.height;
 const X = lon => (lon - EXT.lonMin) / (EXT.lonMax - EXT.lonMin) * W;
@@ -129,7 +137,10 @@ function drawBorders(){
 const DEPTH_BANDS = [[30,'#e7298a','〜30km'],[80,'#7570b3','30〜80km'],[150,'#1b9e77','80〜150km'],[1e9,'#636363','150km〜']];
 const INT_COLORS = {'3':'#ffe600','4':'#ff9500','5-':'#ff5a00','5+':'#e60000','6-':'#b00000','6+':'#7d0000','7':'#4b0082'};
 function inView(lat, lon){ return lat>=EXT.latMin-0.05 && lat<=EXT.latMax+0.05 && lon>=EXT.lonMin-0.05 && lon<=EXT.lonMax+0.05; }
+let currentSnap = null, markers = [], selected = null;
 function render(snap){
+  currentSnap = snap; markers = [];
+  if (selected && selected.date !== snap.date){ selected = null; hideDetail(); }
   ctx.clearRect(0, 0, W, H);
   ctx.fillStyle = '#dde7ee'; ctx.fillRect(0, 0, W, H);
   drawLand();
@@ -140,9 +151,11 @@ function render(snap){
   for (const q of snap.quakes){
     if (!inView(q.lat, q.lon)) continue;
     const band = DEPTH_BANDS.find(b => q.depth <= b[0]);
-    ctx.beginPath(); ctx.arc(X(q.lon), Y(q.lat), 4 + (q.mag-3)*3, 0, 7);
+    const x = X(q.lon), y = Y(q.lat), r = 4 + (q.mag-3)*3;
+    ctx.beginPath(); ctx.arc(x, y, r, 0, 7);
     ctx.fillStyle = 'rgba(255,255,255,0.88)'; ctx.fill();
     ctx.lineWidth = 3; ctx.strokeStyle = band[1]; ctx.stroke();
+    markers.push({kind: 'quake', x, y, r, q});
   }
   // intensity stations: diamonds filled by JMA scale color
   for (const p of snap.intensity){
@@ -151,10 +164,18 @@ function render(snap){
     ctx.beginPath(); ctx.moveTo(x, y-r); ctx.lineTo(x+r, y); ctx.lineTo(x, y+r); ctx.lineTo(x-r, y); ctx.closePath();
     ctx.fillStyle = INT_COLORS[p.maxint] || '#999'; ctx.fill();
     ctx.lineWidth = 1.2; ctx.strokeStyle = '#222'; ctx.stroke();
+    markers.push({kind: 'int', x, y, r, p});
   }
   // GEONET stations
   ctx.fillStyle = 'rgba(20,30,40,0.55)';
   for (const s of snap.stations){ ctx.beginPath(); ctx.arc(X(s.lon), Y(s.lat), 2.2, 0, 7); ctx.fill(); }
+  // highlight for the selected marker
+  if (selected){
+    ctx.beginPath(); ctx.arc(selected.x, selected.y, selected.r + 6, 0, 7);
+    ctx.lineWidth = 2.5; ctx.strokeStyle = '#111'; ctx.stroke();
+    ctx.beginPath(); ctx.arc(selected.x, selected.y, selected.r + 9, 0, 7);
+    ctx.lineWidth = 1.5; ctx.strokeStyle = 'rgba(255,255,255,0.9)'; ctx.stroke();
+  }
   // info + tables + legends
   const f = d => d ? d.slice(5).replace('-','/') : '';
   document.getElementById('info').innerHTML =
@@ -173,7 +194,7 @@ function render(snap){
   document.getElementById('latestQuakes').innerHTML =
     `<table><tr><th>日時</th><th>震央地名</th><th class="num">M</th><th class="num">深さ (km)</th><th>最大震度</th><th>由来</th></tr>` +
     qs.map(q => `<tr><td>${q.time}</td><td>${q.name}</td><td class="num">${q.mag.toFixed(1)}</td><td class="num">${Math.round(q.depth)}</td><td>${q.maxint || '―'}</td><td>${q.src}</td></tr>`).join('') +
-    `</table><p class="src">全件はリポジトリ内の Markdown スナップショット（snapshots/${snap.date}.md）に保存されています。</p>`;
+    `</table><p class="src">全件はリポジトリ内の Markdown スナップショット（${DATA.snapDir}/${snap.date}.md）に保存されています。</p>`;
   const top = snap.stations.slice(0, 8);
   document.getElementById('topTable').innerHTML =
     `<table><tr><th>観測点</th><th>県</th><th class="num">水平変位 (mm)</th><th>向き</th><th class="num">上下変位 (mm)</th></tr>` +
@@ -181,6 +202,53 @@ function render(snap){
     `</table>`;
   drawAstro(snap);
 }
+// ---- click / tap detail for quake epicentres and intensity stations ----
+const detailEl = document.getElementById('detail');
+function hideDetail(){ detailEl.hidden = true; detailEl.innerHTML = ''; }
+function showDetail(m){
+  let html;
+  if (m.kind === 'quake'){
+    const q = m.q;
+    html = `<button class="x" aria-label="閉じる">×</button><strong>○ 震央： ${q.name}</strong><br>` +
+      `発生日時： ${q.time} ／ マグニチュード： M${q.mag.toFixed(1)} ／ 深さ： 約${Math.round(q.depth)}km<br>` +
+      `最大震度： ${q.maxint || '―'} ／ 由来： ${q.src}（${q.src === '確定' ? '地震月報（カタログ編）震源データ' : '日別の震源リスト・暫定値'}）<br>` +
+      `<span class="src">位置： 北緯${q.lat.toFixed(2)}度・東経${q.lon.toFixed(2)}度。出典： 気象庁。</span>`;
+  } else {
+    const p = m.p;
+    html = `<button class="x" aria-label="閉じる">×</button><strong>◆ 震度観測点： ${p.name}</strong><br>` +
+      `市町村： ${p.city}（${p.pref}） ／ 期間最大震度： <strong>${p.maxint}</strong> ／ 観測回数： ${p.count}回<br>` +
+      `<span class="src">このスナップショットの集計期間に、この観測点で観測された最大の震度です。出典： 気象庁（地震情報）。</span>`;
+  }
+  detailEl.innerHTML = html;
+  detailEl.hidden = false;
+  detailEl.querySelector('.x').addEventListener('click', () => { selected = null; hideDetail(); if (currentSnap) render(currentSnap); });
+}
+function eventPos(ev){
+  const rect = cv.getBoundingClientRect();
+  const cx = (ev.touches && ev.touches[0]) ? ev.touches[0].clientX : ev.clientX;
+  const cy = (ev.touches && ev.touches[0]) ? ev.touches[0].clientY : ev.clientY;
+  return { x: (cx - rect.left) * W / rect.width, y: (cy - rect.top) * H / rect.height };
+}
+function pickMarker(x, y){
+  let best = null, bestD = 1e9;
+  for (const m of markers){
+    const d = Math.hypot(x - m.x, y - m.y);
+    if (d <= Math.max(m.r + 10, 18) && d < bestD){ best = m; bestD = d; }
+  }
+  return best;
+}
+cv.addEventListener('click', ev => {
+  const {x, y} = eventPos(ev);
+  const m = pickMarker(x, y);
+  selected = m ? {...m, date: currentSnap.date} : null;
+  if (m) showDetail(m); else hideDetail();
+  render(currentSnap);
+  if (m) showDetail(m);
+});
+cv.addEventListener('mousemove', ev => {
+  const {x, y} = eventPos(ev);
+  cv.style.cursor = pickMarker(x, y) ? 'pointer' : '';
+});
 </script>
 <script>
 const SYNODIC = 29.530588853;
