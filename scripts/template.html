@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>地殻変動ヒートマップ（試作）― 東北の電子基準点</title>
+<style>
+  body { font-family: "Hiragino Sans", "Noto Sans JP", sans-serif; margin: 0; background: #f4f6f8; color: #1c2733; }
+  .wrap { max-width: 1060px; margin: 0 auto; padding: 16px 14px 40px; }
+  .top { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+  .titlebox { flex: 1 1 420px; min-width: 300px; }
+  h1 { font-size: 22px; margin: 4px 0 8px; }
+  h2 { font-size: 16px; margin: 26px 0 8px; }
+  .notice { background: #fff3cd; border: 1px solid #e0c66a; border-radius: 8px; padding: 10px 12px; font-size: 13.5px; line-height: 1.6; }
+  .astro { background: #101828; color: #e8edf5; border-radius: 10px; padding: 10px 14px; display: flex; gap: 14px; align-items: center; }
+  .astro .txt { font-size: 12.5px; line-height: 1.55; }
+  .astro .big { font-size: 14.5px; font-weight: 700; }
+  .astro canvas { display: block; }
+  .yahoo { display: inline-block; margin: 14px 0 4px; background: #ff0033; color: #fff; font-weight: 700;
+           padding: 10px 16px; border-radius: 8px; text-decoration: none; font-size: 14.5px; }
+  .yahoo small { font-weight: 400; }
+  .controls { margin: 12px 0 6px; font-size: 14px; }
+  .controls select { font-size: 15px; padding: 4px 8px; }
+  .info { font-size: 13.5px; color: #33475c; line-height: 1.7; margin: 6px 0 10px; }
+  canvas#map { width: 100%; height: auto; background: #dde7ee; border-radius: 10px; }
+  .legends { display: flex; gap: 22px; flex-wrap: wrap; font-size: 12.5px; margin-top: 8px; }
+  .legends .grp { line-height: 1.9; }
+  .chip { display: inline-block; width: 12px; height: 12px; border-radius: 50%; border: 2px solid #888; vertical-align: -2px; margin-right: 3px; background: #fff; }
+  .dia { display: inline-block; width: 10px; height: 10px; transform: rotate(45deg); border: 1px solid #333; vertical-align: -1px; margin: 0 3px 0 2px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; background: #fff; }
+  th, td { border: 1px solid #ccd6df; padding: 5px 8px; text-align: left; }
+  th { background: #e8eef4; }
+  td.num, th.num { text-align: right; }
+  .src { color: #5a6b7c; font-size: 12.5px; }
+  footer { margin-top: 30px; font-size: 12.5px; color: #5a6b7c; line-height: 1.8; border-top: 1px solid #ccd6df; padding-top: 12px; }
+  .expl { font-size: 13.5px; line-height: 1.8; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div class="titlebox">
+      <h1>地殻変動ヒートマップ（試作）</h1>
+      <div class="notice">これは<strong>地震予測ではありません</strong>。国土地理院の電子基準点（GNSS観測点）の位置の変化を、見える化した試作ページです。色の濃さは「約30日前と比べた、この1週間の地面の動き」の大きさを表します。</div>
+      <a class="yahoo" href="https://typhoon.yahoo.co.jp/weather/jp/earthquake/" target="_blank" rel="noopener">外部サイト： Yahoo!天気・災害「地震情報」で最新の地震を見る <small>（別タブで開きます）</small></a>
+    </div>
+    <div class="astro" id="astro">
+      <canvas id="moonCv" width="76" height="76"></canvas>
+      <div>
+        <canvas id="orbitCv" width="128" height="76"></canvas>
+        <div class="txt" id="astroTxt"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="controls">
+    表示する日付（履歴）：
+    <select id="dateSel"></select>
+    <span class="src">　毎日更新でスナップショットが貯まると、過去の日付に切り替えて見られます。</span>
+  </div>
+  <div class="info" id="info"></div>
+
+  <canvas id="map" width="1000" height="1180"></canvas>
+  <div class="legends" id="legends"></div>
+
+  <h2>最新の地震リスト <span class="src">（このスナップショットの対象期間・範囲の新しい順10件）</span></h2>
+  <div id="latestQuakes"></div>
+
+  <h2>動きの大きかった観測点</h2>
+  <div id="topTable"></div>
+
+  <h2>この図について</h2>
+  <p class="expl">電子基準点の日々の座標値から、直近7日間の平均位置と、約30日前の7日間の平均位置の差を取り、水平方向の動きの大きさを色で補間表示しています（上下の動きは観測点リストに記載）。2011年の東北地方太平洋沖地震の余効変動やプレート運動そのものも含む動きで、観測には数mm程度の誤差があります。海の部分の色は、陸の観測点からの補間が伸びたもので、海上に観測点はありません。震央（○）と震度観測点（◆）も重ねて表示しています。月齢・太陽と月の位置・地磁気は、その日の様子を示す参考表示です。</p>
+
+  <footer id="srcFooter"></footer>
+</div>
+<script>
+const DATA = /*__DATA__*/;
+const EXT = {latMin:36.8, latMax:41.5, lonMin:139.3, lonMax:142.3};
+const cv = document.getElementById('map'), ctx = cv.getContext('2d');
+const W = cv.width, H = cv.height;
+const X = lon => (lon - EXT.lonMin) / (EXT.lonMax - EXT.lonMin) * W;
+const Y = lat => (EXT.latMax - lat) / (EXT.latMax - EXT.latMin) * H;
+const STOPS = [[49,54,149],[116,173,209],[255,255,191],[244,109,67],[165,0,38]];
+function cmap(t){
+  t = Math.max(0, Math.min(1, t)) * (STOPS.length - 1);
+  const i = Math.min(STOPS.length - 2, Math.floor(t)), f = t - i;
+  const a = STOPS[i], b = STOPS[i+1];
+  return [0,1,2].map(k => Math.round(a[k] + (b[k]-a[k]) * f));
+}
+const heatCache = {};
+function heatCanvas(snap){
+  if (heatCache[snap.date]) return heatCache[snap.date];
+  const cell = 5, gw = Math.ceil(W/cell), gh = Math.ceil(H/cell);
+  const off = document.createElement('canvas'); off.width = gw; off.height = gh;
+  const octx = off.getContext('2d'), img = octx.createImageData(gw, gh);
+  const sts = snap.stations;
+  for (let gy=0; gy<gh; gy++) for (let gx=0; gx<gw; gx++){
+    const lon = EXT.lonMin + (gx+0.5)/gw*(EXT.lonMax-EXT.lonMin);
+    const lat = EXT.latMax - (gy+0.5)/gh*(EXT.latMax-EXT.latMin);
+    let sw=0, sv=0, dmin=1e9;
+    for (const s of sts){
+      const dx=(lon-s.lon)*Math.cos(lat*Math.PI/180)*111, dy=(lat-s.lat)*111;
+      const d2=dx*dx+dy*dy; dmin=Math.min(dmin, Math.sqrt(d2));
+      const w=1/Math.max(d2, 25); sw+=w; sv+=w*s.h;
+    }
+    const v = sv/sw, idx=(gy*gw+gx)*4, c=cmap(Math.min(1, v/12));
+    img.data[idx]=c[0]; img.data[idx+1]=c[1]; img.data[idx+2]=c[2];
+    img.data[idx+3]= dmin>60 ? 0 : Math.round(235 - Math.max(0, dmin-38)*7);
+  }
+  octx.putImageData(img, 0, 0);
+  heatCache[snap.date] = off; return off;
+}
+function drawCoast(){
+  ctx.beginPath();
+  for (const ring of DATA.coast){
+    ring.forEach(([lon,lat], i) => i ? ctx.lineTo(X(lon), Y(lat)) : ctx.moveTo(X(lon), Y(lat)));
+    ctx.closePath();
+  }
+  ctx.fillStyle = '#f4f1e6'; ctx.fill();
+  ctx.strokeStyle = '#7a8a99'; ctx.lineWidth = 1.1; ctx.stroke();
+}
+const DEPTH_BANDS = [[30,'#e7298a','〜30km'],[80,'#7570b3','30〜80km'],[150,'#1b9e77','80〜150km'],[1e9,'#636363','150km〜']];
+const INT_COLORS = {'3':'#ffe600','4':'#ff9500','5-':'#ff5a00','5+':'#e60000','6-':'#b00000','6+':'#7d0000','7':'#4b0082'};
+function inView(lat, lon){ return lat>=EXT.latMin-0.05 && lat<=EXT.latMax+0.05 && lon>=EXT.lonMin-0.05 && lon<=EXT.lonMax+0.05; }
+function render(snap){
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = '#dde7ee'; ctx.fillRect(0, 0, W, H);
+  drawCoast();
+  ctx.imageSmoothingEnabled = true;
+  ctx.drawImage(heatCanvas(snap), 0, 0, W, H);
+  // earthquakes: white-filled circles, ring color = depth, size = magnitude
+  for (const q of snap.quakes){
+    if (!inView(q.lat, q.lon)) continue;
+    const band = DEPTH_BANDS.find(b => q.depth <= b[0]);
+    ctx.beginPath(); ctx.arc(X(q.lon), Y(q.lat), 4 + (q.mag-3)*3, 0, 7);
+    ctx.fillStyle = 'rgba(255,255,255,0.88)'; ctx.fill();
+    ctx.lineWidth = 3; ctx.strokeStyle = band[1]; ctx.stroke();
+  }
+  // intensity stations: diamonds filled by JMA scale color
+  for (const p of snap.intensity){
+    if (!inView(p.lat, p.lon)) continue;
+    const x=X(p.lon), y=Y(p.lat), r=8;
+    ctx.beginPath(); ctx.moveTo(x, y-r); ctx.lineTo(x+r, y); ctx.lineTo(x, y+r); ctx.lineTo(x-r, y); ctx.closePath();
+    ctx.fillStyle = INT_COLORS[p.maxint] || '#999'; ctx.fill();
+    ctx.lineWidth = 1.2; ctx.strokeStyle = '#222'; ctx.stroke();
+  }
+  // GEONET stations
+  ctx.fillStyle = 'rgba(20,30,40,0.55)';
+  for (const s of snap.stations){ ctx.beginPath(); ctx.arc(X(s.lon), Y(s.lat), 2.2, 0, 7); ctx.fill(); }
+  // info + tables + legends
+  const f = d => d ? d.slice(5).replace('-','/') : '';
+  document.getElementById('info').innerHTML =
+    `観測日 <strong>${snap.date}</strong> 時点 ／ 解： ${snap.sol}<br>` +
+    `直近 ${f(snap.periodA[0])}〜${f(snap.periodA[1])} の平均と、約30日前（${f(snap.periodB[0])}〜${f(snap.periodB[1])}）の平均の差 ／ 観測点 ${snap.n} 点（除外 ${snap.nex} 点）<br>` +
+    `${snap.quakeNote} ／ ${snap.catRange}<br>${snap.intNote}`;
+  const bands = DEPTH_BANDS.map(b => `<span class="chip" style="border-color:${b[1]}"></span>${b[2]}`).join(' ');
+  const ints = Object.keys(INT_COLORS).filter(k => snap.intensity.some(p => p.maxint === k));
+  document.getElementById('legends').innerHTML =
+    `<div class="grp">水平変位 <span style="display:inline-block;width:130px;height:10px;vertical-align:-1px;background:linear-gradient(90deg,rgb(49,54,149),rgb(116,173,209),rgb(255,255,191),rgb(244,109,67),rgb(165,0,38))"></span> 0 → 12mm以上</div>` +
+    `<div class="grp">○ 震央（大きさ＝マグニチュード、輪の色＝深さ） ${bands}</div>` +
+    (ints.length
+      ? `<div class="grp">◆ 震度観測点（期間最大震度） ${ints.map(k => `<span class="dia" style="background:${INT_COLORS[k]}"></span>震度${k}`).join(' ')}</div>`
+      : `<div class="grp">◆ 震度観測点： この期間は震度3以上の観測点なし</div>`);
+  const qs = [...snap.quakes].sort((a,b) => b.time.localeCompare(a.time)).slice(0, 10);
+  document.getElementById('latestQuakes').innerHTML =
+    `<table><tr><th>日時</th><th>震央地名</th><th class="num">M</th><th class="num">深さ (km)</th><th>最大震度</th><th>由来</th></tr>` +
+    qs.map(q => `<tr><td>${q.time}</td><td>${q.name}</td><td class="num">${q.mag.toFixed(1)}</td><td class="num">${Math.round(q.depth)}</td><td>${q.maxint || '―'}</td><td>${q.src}</td></tr>`).join('') +
+    `</table><p class="src">全件はリポジトリ内の Markdown スナップショット（snapshots/${snap.date}.md）に保存されています。</p>`;
+  const top = snap.stations.slice(0, 8);
+  document.getElementById('topTable').innerHTML =
+    `<table><tr><th>観測点</th><th>県</th><th class="num">水平変位 (mm)</th><th>向き</th><th class="num">上下変位 (mm)</th></tr>` +
+    top.map(s => `<tr><td>${s.name}</td><td>${s.pref}</td><td class="num">${s.h.toFixed(1)}</td><td>${s.dir}</td><td class="num">${s.v>=0?'+':''}${s.v.toFixed(1)}</td></tr>`).join('') +
+    `</table>`;
+  drawAstro(snap);
+}
+</script>
+<script>
+const SYNODIC = 29.530588853;
+function moonPhase(dateStr){
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const jd = Date.UTC(y, m-1, d, 3, 0) / 86400000 + 2440587.5; // 12:00 JST
+  let p = ((jd - 2451550.1) % SYNODIC) / SYNODIC; if (p < 0) p += 1;
+  return p;
+}
+function drawMoon(p){
+  const c = document.getElementById('moonCv'), g = c.getContext('2d');
+  const cx = 38, cy = 38, R = 33;
+  g.clearRect(0, 0, 76, 76);
+  const cos = Math.cos(2 * Math.PI * p);
+  for (let y = -R; y <= R; y++){
+    const chord = Math.sqrt(R*R - y*y);
+    g.fillStyle = '#39415a';
+    g.fillRect(cx - chord, cy + y, chord * 2, 1);
+    let x0, x1;
+    if (p < 0.5) { x0 = cos * chord; x1 = chord; }
+    else { x0 = -chord; x1 = -cos * chord; }
+    if (x1 > x0) { g.fillStyle = '#f7efda'; g.fillRect(cx + x0, cy + y, x1 - x0, 1); }
+  }
+  g.beginPath(); g.arc(cx, cy, R, 0, 7); g.strokeStyle = '#8b96ab'; g.lineWidth = 1; g.stroke();
+}
+function drawOrbit(p){
+  const c = document.getElementById('orbitCv'), g = c.getContext('2d');
+  g.clearRect(0, 0, 128, 76);
+  const ex = 66, ey = 38, r = 25;
+  g.setLineDash([2, 3]); g.beginPath(); g.arc(ex, ey, r, 0, 7);
+  g.strokeStyle = '#5a6b84'; g.stroke(); g.setLineDash([]);
+  g.beginPath(); g.arc(14, ey, 7, 0, 7); g.fillStyle = '#ffd94d'; g.fill();
+  g.beginPath(); g.arc(ex, ey, 5, 0, 7); g.fillStyle = '#6ab0ff'; g.fill();
+  const th = Math.PI + 2 * Math.PI * p;
+  const mx = ex + r * Math.cos(th), my = ey + r * Math.sin(th);
+  g.beginPath(); g.moveTo(ex, ey); g.lineTo(mx, my); g.strokeStyle = '#43536b'; g.stroke();
+  g.beginPath(); g.arc(mx, my, 3.6, 0, 7); g.fillStyle = '#e8edf5'; g.fill();
+  g.fillStyle = '#aeb9c9'; g.font = '9px sans-serif';
+  g.fillText('太陽', 5, ey + 20); g.fillText('地球', ex - 8, ey + 20); g.fillText('月', mx - 3, my - 7);
+}
+function drawAstro(snap){
+  const p = moonPhase(snap.date), age = p * SYNODIC;
+  drawMoon(p); drawOrbit(p);
+  const illum = Math.round((1 - Math.cos(2 * Math.PI * p)) / 2 * 100);
+  const names = [[1.8,'新月'],[5.9,'三日月'],[8.8,'上弦'],[13.8,'満月に近い月'],[16.3,'満月'],[21.1,'下弦に近い月'],[24.0,'下弦'],[28.5,'新月に近い月'],[99,'新月']];
+  const nm = names.find(n => age < n[0])[1];
+  const ang = Math.round(p <= 0.5 ? 360 * p : 360 * (1 - p));
+  const dS = Math.min(p, Math.abs(p - 0.5), 1 - p), dQ = Math.min(Math.abs(p - 0.25), Math.abs(p - 0.75));
+  const tide = dS <= 0.055 ? '大潮の頃' : (dQ <= 0.055 ? '小潮の頃' : '中潮の頃');
+  document.getElementById('astroTxt').innerHTML =
+    `<span class="big">${snap.date}</span><br>` +
+    `月齢 ${age.toFixed(1)}（${nm}）・輝面比 ${illum}%<br>` +
+    `太陽―地球―月の角度 約${ang}° ／ ${tide}<br>` +
+    `地磁気： ${snap.kpNote}`;
+}
+document.getElementById('srcFooter').innerHTML =
+  '出典： 地殻変動データ ― 国土地理院「電子基準点データ提供サービス 日々の座標値」（DOI: 10.57499/GSI_GNSS_2026_001）を加工して作成 ／ ' +
+  '震源データ ― 気象庁（日別の震源リスト＝暫定値、地震月報（カタログ編）震源データ＝確定値。正式カタログが未刊行の期間は暫定値で表示） ／ ' +
+  '震度データ ― 気象庁（地震情報） ／ 地磁気 ― GFZ（ドイツ地球科学研究センター）Kp指数 ／ 海岸線 ― 国土数値情報（行政区域データ）を加工 ／ ' +
+  '月齢・太陽と月の位置は天文計算による表示です。';
+const sel = document.getElementById('dateSel');
+const snapsDesc = [...DATA.snaps].reverse();
+for (const s of snapsDesc){
+  const o = document.createElement('option');
+  o.value = s.date;
+  const tag = s.sol.includes('R5.1') ? '速報解 R5.1' : (s.sol.includes('F5.1') ? '最終解 F5.1' : s.sol);
+  o.textContent = `${s.date}（${tag}）`;
+  sel.appendChild(o);
+}
+sel.addEventListener('change', () => render(DATA.snaps.find(s => s.date === sel.value)));
+render(snapsDesc[0]);
+</script>
+</body>
+</html>

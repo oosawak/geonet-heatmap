@@ -1,14 +1,35 @@
 #!/usr/bin/env python3
 """Parse GEONET .pos files and compute per-station displacement:
 mean of latest 7 days vs mean of the 7-day window ~30 days earlier.
-Outputs work/stations.json."""
-import os, re, json, math, glob
+Also collects the overlay data for the same period (JMA earthquakes,
+JMA intensity points, GFZ Kp) and writes everything into the Markdown
+master record.
+
+Outputs:
+  - snapshots/<latest-date>.md  (Markdown 正本: meta + tables)
+  - work/stations_<SOL>.json    (intermediate, for debugging)
+
+Usage:
+  python3 scripts/compute_displacement.py [--data-dir data] [--sol F5.1]
+"""
+import os, re, json, math, glob, argparse, sys
 import datetime as dt
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 ROOT = os.path.expanduser("~/workspace/geonet-heatmap")
-DATA = os.path.join(ROOT, "data")
 BBOX = dict(lat_min=36.8, lat_max=41.5, lon_min=139.3, lon_max=142.3)
 M_PER_DEG = 111194.9  # spherical approx, fine for differencing
+SOL_LABEL = {
+    "F5.1": "F5.1（最終解・ITRF2020）",
+    "F5": "F5（最終解・ITRF2014）",
+    "R5.1": "R5.1（速報解・ITRF2020）",
+    "R5": "R5（速報解・ITRF2014）",
+}
+DIRS = ["北", "北東", "東", "南東", "南", "南西", "西", "北西"]
+
+def dir8(dE, dN):
+    ang = math.degrees(math.atan2(dE, dN)) % 360
+    return DIRS[int((ang + 22.5) // 45) % 8]
 
 def parse_pos(path):
     name = None; rows = []
@@ -32,24 +53,32 @@ def window_mean(rows, end, days=7):
     return (sum(r[1] for r in sel) / n, sum(r[2] for r in sel) / n,
             sum(r[3] for r in sel) / n, sel[0][0], sel[-1][0], n)
 
-def main():
-    fetch = json.load(open(os.path.join(ROOT, "work", "fetch_result.json"), encoding="utf-8"))
-    names = {c: v[0] for c, v in fetch["stations"].items()}
-    prefs = {c: v[1] for c, v in fetch["stations"].items()}
+def compute_stations(data_dir):
+    names, prefs = {}, {}
+    sl = os.path.join(ROOT, "work", "stations_list.json")
+    if os.path.exists(sl):
+        for c, v in json.load(open(sl, encoding="utf-8")).items():
+            names[c], prefs[c] = v[0], v[1]
+    fr = os.path.join(ROOT, "work", "fetch_result.json")
+    if os.path.exists(fr):
+        fetch = json.load(open(fr, encoding="utf-8"))
+        for c, v in fetch.get("stations", {}).items():
+            names.setdefault(c, v[0]); prefs.setdefault(c, v[1])
     stations, excluded, skipped = [], [], []
-    for path in sorted(glob.glob(os.path.join(DATA, "*.pos"))):
+    for path in sorted(glob.glob(os.path.join(data_dir, "*.pos"))):
         code = os.path.basename(path).split(".")[0]
         jname, rows = parse_pos(path)
         if not rows:
             skipped.append((code, "no data rows")); continue
         latest = max(r[0] for r in rows)
-        a = window_mean(rows, latest)                       # latest 7 days
-        b = window_mean(rows, latest - dt.timedelta(days=30))  # ~30 days earlier, 7 days
+        a = window_mean(rows, latest)
+        b = window_mean(rows, latest - dt.timedelta(days=30))
         if not a or not b:
             skipped.append((code, "window shortage")); continue
         lat0 = sum(r[1] for r in rows) / len(rows)
         lon0 = sum(r[2] for r in rows) / len(rows)
-        if not (BBOX["lat_min"] <= lat0 <= BBOX["lat_max"] and BBOX["lon_min"] <= lon0 <= BBOX["lon_max"]):
+        if not (BBOX["lat_min"] <= lat0 <= BBOX["lat_max"]
+                and BBOX["lon_min"] <= lon0 <= BBOX["lon_max"]):
             skipped.append((code, "outside bbox")); continue
         dN = (a[0] - b[0]) * M_PER_DEG * 1000.0
         dE = (a[1] - b[1]) * M_PER_DEG * math.cos(math.radians(lat0)) * 1000.0
@@ -59,6 +88,7 @@ def main():
                "lat": round(lat0, 5), "lon": round(lon0, 5),
                "dE_mm": round(dE, 1), "dN_mm": round(dN, 1),
                "horiz_mm": round(horiz, 1), "vert_mm": round(vert, 1),
+               "dir": dir8(dE, dN),
                "winA": [str(a[3]), str(a[4])], "winB": [str(b[3]), str(b[4])],
                "latest": str(latest)}
         if horiz > 50 or abs(vert) > 80:
@@ -67,23 +97,143 @@ def main():
         else:
             stations.append(rec)
     stations.sort(key=lambda s: -s["horiz_mm"])
+    return stations, excluded, skipped
+
+def fetch_extras(winB_start, winA_end, latest):
+    """Quakes (JMA catalog+daily merged), intensity points (JMA info JSON),
+    geomagnetic Kp (GFZ). Each guarded: failures yield empty data."""
+    extras = {"quakes": [], "cat_through": None, "intensity": [],
+              "int_cov": None, "int_period_max": None, "kp": None}
+    d0, d1 = dt.date.fromisoformat(winB_start), dt.date.fromisoformat(winA_end)
+    try:
+        import jma_quakes
+        extras["quakes"], extras["cat_through"] = jma_quakes.fetch_merged(d0, d1, 3.0)
+    except Exception as ex:
+        print("quakes fetch failed:", ex, flush=True)
+    try:
+        import jma_intensity
+        pts, cs, ce, pm = jma_intensity.fetch_intensity(d0, d1, 3)
+        extras["intensity"] = pts
+        extras["int_cov"] = (cs, ce) if cs else None
+        extras["int_period_max"] = pm
+    except Exception as ex:
+        print("intensity fetch failed:", ex, flush=True)
+    try:
+        import geomag
+        extras["kp"] = geomag.kp_for_date(dt.date.fromisoformat(latest))
+    except Exception as ex:
+        print("geomag fetch failed:", ex, flush=True)
+    return extras
+
+def write_snapshot(meta, stations, excluded, extras):
+    label = meta["solution_label"]
+    latest = meta["latest_date"]
+    a, b = meta["winA"], meta["winB"]
+    top = stations[0]
+    quakes = extras["quakes"]
+    n_fin = sum(1 for q in quakes if q["src"] == "確定")
+    L = [
+        f"# 地殻変動スナップショット（{latest}）",
+        "",
+        f"- 解: {label}",
+        f"- データ最新日: {latest}",
+        f"- 直近期間: {a[0]} 〜 {a[1]}（7日間平均）",
+        f"- 比較期間: {b[0]} 〜 {b[1]}（7日間平均、約30日前）",
+        f"- 観測点数: {meta['n_stations']}",
+        f"- 除外点数: {meta['n_excluded']}（異常に大きな変位、アンテナ交換などによる見かけの跳びの疑い）",
+        f"- 水平変位の中央値: {meta['median_mm']:.1f} mm",
+        f"- 水平変位の最大: {meta['max_mm']:.1f} mm（{top['name']}・{top['pref']}）",
+        f"- 地震データ: 震央 {len(quakes)} 件（確定 {n_fin} 件／暫定 {len(quakes) - n_fin} 件、M3.0以上、緯度35.5〜42.5・経度138.0〜145.0）",
+        "- 正式カタログ収録範囲: " + (f"〜{extras['cat_through']}（これより後は暫定値）"
+                                     if extras["cat_through"] else "現時点で対象期間分は未刊行（全件が暫定値）"),
+    ]
+    if extras["int_cov"]:
+        cs, ce = extras["int_cov"]
+        L.append(f"- 震度データ: 震度3以上の観測点 {len(extras['intensity'])} 点"
+                 f"（集計期間 {cs} 〜 {ce}、地震情報JSONの公開範囲による。"
+                 f"期間内の東北の最大震度: {extras['int_period_max'] or '―'}）")
+    else:
+        L.append("- 震度データ: 取得できず")
+    L.append("- 地磁気: " + (f"Kp指数 最大 {extras['kp']:.1f}（GFZ、{latest}）"
+                             if extras["kp"] is not None else "取得できず"))
+    L += ["", "## 観測点ごとの変位", "",
+          "| 観測点コード | 観測点 | 県 | 緯度 | 経度 | 東西変位 (mm) | 南北変位 (mm) | 水平変位 (mm) | 向き | 上下変位 (mm) |",
+          "|---|---|---|---:|---:|---:|---:|---:|---|---:|"]
+    for s in stations:
+        L.append(f"| {s['code']} | {s['name']} | {s['pref']} | {s['lat']:.5f} | {s['lon']:.5f} "
+                 f"| {s['dE_mm']:.1f} | {s['dN_mm']:.1f} | {s['horiz_mm']:.1f} | {s['dir']} | {s['vert_mm']:+.1f} |")
+    L += ["", "## 除外した観測点", ""]
+    if excluded:
+        for e in excluded:
+            L.append(f"- {e['name']}（{e['pref']}）: {e.get('reason', '')}")
+    else:
+        L.append("（なし）")
+    L += ["", "## 震央リスト（気象庁）", "",
+          "震源データ: 気象庁。確定＝地震月報（カタログ編）震源データ、暫定＝日別の震源リスト。",
+          "",
+          "| 日時 | 震央地名 | 緯度 | 経度 | 深さ (km) | M | 最大震度 | 由来 |",
+          "|---|---|---:|---:|---:|---:|---|---|"]
+    for q in sorted(quakes, key=lambda q: q["time"], reverse=True):
+        L.append(f"| {q['time']} | {q['name']} | {q['lat']:.3f} | {q['lon']:.3f} "
+                 f"| {q['depth_km']:.0f} | {q['mag']:.1f} | {q.get('maxint') or '―'} | {q['src']} |")
+    L += ["", "## 震度観測点（期間最大震度、震度3以上）", "",
+          "震度データ: 気象庁（地震情報JSON）。観測点ごとに集計期間中の最大震度。",
+          ""]
+    if extras["intensity"]:
+        L += ["| 観測点 | 市町村 | 県 | 緯度 | 経度 | 最大震度 | 観測回数 |",
+              "|---|---|---|---:|---:|---|---:|"]
+        for p in extras["intensity"]:
+            L.append(f"| {p['name']} | {p['city']} | {p['pref']} | {p['lat']:.2f} | {p['lon']:.2f} "
+                     f"| {p['maxint']} | {p['count']} |")
+    else:
+        L.append("（震度3以上の観測点なし）")
+    L.append("")
+    path = os.path.join(ROOT, "snapshots", f"{latest}.md")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(L))
+    return path
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--data-dir", default="data")
+    ap.add_argument("--sol", default="F5.1")
+    ap.add_argument("--no-extras", action="store_true")
+    args = ap.parse_args()
+    data_dir = os.path.join(ROOT, args.data_dir)
+    label = SOL_LABEL.get(args.sol, args.sol)
+    stations, excluded, skipped = compute_stations(data_dir)
+    if not stations:
+        print("ERROR: no stations computed"); return 1
+    from collections import Counter
+    winA = Counter(tuple(s["winA"]) for s in stations).most_common(1)[0][0]
+    winB = Counter(tuple(s["winB"]) for s in stations).most_common(1)[0][0]
+    latest = max(s["latest"] for s in stations)
     hs = sorted(s["horiz_mm"] for s in stations)
     def pct(q):
-        return hs[min(len(hs) - 1, int(q * len(hs)))] if hs else 0
-    meta = {"solution": "F5.1 (ITRF2020)", "n_stations": len(stations),
-            "n_excluded": len(excluded), "n_skipped": len(skipped),
-            "median_mm": hs[len(hs) // 2] if hs else 0, "p90_mm": pct(0.90), "p95_mm": pct(0.95),
-            "max_mm": hs[-1] if hs else 0,
-            "latest_date": max((s["latest"] for s in stations), default=None)}
-    out = {"meta": meta, "stations": stations, "excluded": excluded, "skipped": skipped}
-    with open(os.path.join(ROOT, "work", "stations.json"), "w", encoding="utf-8") as f:
+        return hs[min(len(hs) - 1, int(q * len(hs)))]
+    meta = {"solution": args.sol, "solution_label": label,
+            "n_stations": len(stations), "n_excluded": len(excluded),
+            "n_skipped": len(skipped),
+            "median_mm": hs[len(hs) // 2], "p90_mm": pct(0.90), "p95_mm": pct(0.95),
+            "max_mm": hs[-1], "latest_date": latest,
+            "winA": list(winA), "winB": list(winB)}
+    extras = ({"quakes": [], "cat_through": None, "intensity": [],
+               "int_cov": None, "int_period_max": None, "kp": None}
+              if args.no_extras else fetch_extras(winB[0], winA[1], latest))
+    path = write_snapshot(meta, stations, excluded, extras)
+    out = {"meta": meta, "stations": stations, "excluded": excluded,
+           "skipped": skipped, "extras": extras}
+    with open(os.path.join(ROOT, "work", f"stations_{args.sol}.json"), "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=1)
     print(json.dumps(meta, ensure_ascii=False))
-    print("TOP10:")
-    for s in stations[:10]:
-        print(f"  {s['name']} ({s['pref']}) horiz={s['horiz_mm']}mm vert={s['vert_mm']}mm dE={s['dE_mm']} dN={s['dN_mm']}")
-    print("EXCLUDED:", [(e["name"], e["reason"]) for e in excluded])
-    print("SKIPPED:", skipped[:10], "..." if len(skipped) > 10 else "")
+    print("snapshot:", path)
+    print(f"quakes={len(extras['quakes'])} catalog_through={extras['cat_through']} "
+          f"intensity_pts={len(extras['intensity'])} kp={extras['kp']}")
+    print("TOP5:")
+    for s in stations[:5]:
+        print(f"  {s['name']} ({s['pref']}) horiz={s['horiz_mm']}mm vert={s['vert_mm']}mm")
+    return 0
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
